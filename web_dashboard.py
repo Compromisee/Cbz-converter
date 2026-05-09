@@ -863,6 +863,58 @@ label {
   .card { padding: 18px; border-radius: 14px; }
   .meta-fields, .settings-grid { grid-template-columns: 1fr; }
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: var(--dark);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: 100px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.header-btn:hover {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red);
+  transform: translateY(-1px);
+}
+
+.header-btn:active {
+  transform: scale(0.96);
+}
+
+.header-btn .material-icons-round {
+  font-size: 16px;
+}
+
+.header-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@media (max-width: 600px) {
+  .header-btn span:not(.material-icons-round) {
+    display: none;
+  }
+  .header-btn {
+    padding: 7px 10px;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -874,11 +926,16 @@ label {
       <span class="material-icons-round brand-icon">auto_stories</span>
       <span class="brand-name">CBZ Converter</span>
     </div>
-    <span id="status-badge" class="badge badge-ready">
-      <span class="material-icons-round">check_circle</span>Ready
-    </span>
+    <div class="header-actions">
+      <button class="header-btn" onclick="clearCache()" title="Clear temp files & cache">
+        <span class="material-icons-round">cleaning_services</span>
+        <span>Clear Cache</span>
+      </button>
+      <span id="status-badge" class="badge badge-ready">
+        <span class="material-icons-round">check_circle</span>Ready
+      </span>
+    </div>
   </header>
-
   <!-- Top row: Files (large dark) + stack (search red, settings blue) -->
   <div class="grid-row">
 
@@ -1358,6 +1415,96 @@ async function pickResult(i) {
 
   updatePreview();
 }
+async function clearCache() {
+  // Confirm action
+  if (!confirm('Clear all temp files, completed sessions, and API cache?\n\nThis will:\n• Delete uploaded temp files\n• Delete completed output files (downloads will still be valid for active sessions)\n• Clear API search cache\n• Reset session history\n\nActive conversions will not be affected.')) {
+    return;
+  }
+
+  const btn = document.querySelector('.header-btn');
+  btn.disabled = true;
+  const originalContent = btn.innerHTML;
+  btn.innerHTML = '<span class="material-icons-round">hourglass_empty</span><span>Clearing...</span>';
+
+  // Also clear browser-side state
+  let browserCleared = 0;
+
+  // Clear file selection
+  files = [];
+  selectedIdx = 0;
+  selectedManga = null;
+  searchResults = [];
+
+  // Clear localStorage if anything was stored
+  try {
+    const keys = Object.keys(localStorage);
+    for (const k of keys) {
+      if (k.startsWith('cbz_')) {
+        localStorage.removeItem(k);
+        browserCleared++;
+      }
+    }
+  } catch (e) {}
+
+  // Clear sessionStorage
+  try {
+    const keys = Object.keys(sessionStorage);
+    for (const k of keys) {
+      if (k.startsWith('cbz_')) {
+        sessionStorage.removeItem(k);
+        browserCleared++;
+      }
+    }
+  } catch (e) {}
+
+  // Reset UI
+  renderFiles();
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-results').classList.add('hidden');
+  document.getElementById('manga-info').classList.add('hidden');
+  document.getElementById('downloads-card').classList.add('hidden');
+  document.getElementById('dl-list').innerHTML = '';
+  document.getElementById('progress-bar').style.width = '0%';
+  document.getElementById('progress-pct').textContent = '0%';
+  document.getElementById('progress-current').textContent = '—';
+  document.getElementById('progress-status').textContent = 'Idle';
+  document.getElementById('p-done').textContent = '0';
+  document.getElementById('p-failed').textContent = '0';
+  document.getElementById('m-title').value = '';
+  document.getElementById('m-author').value = '';
+  document.getElementById('m-vtitle').value = '';
+  document.getElementById('m-date').value = '';
+  document.getElementById('search-status').textContent = '';
+  updatePreview();
+
+  // Clear server-side
+  try {
+    const r = await fetch('/api/clear-cache', { method: 'POST' });
+    const d = await r.json();
+
+    let log = '\n═══ CACHE CLEARED ═══\n';
+    log += `  Server uploads:    ${d.cleared.uploads}\n`;
+    log += `  Server outputs:    ${d.cleared.outputs}\n`;
+    log += `  Sessions cleared:  ${d.cleared.sessions}\n`;
+    log += `  API cache entries: ${d.cleared.api_cache}\n`;
+    log += `  Browser entries:   ${browserCleared}\n`;
+    if (d.cleared.errors && d.cleared.errors.length) {
+      log += '\n  Warnings:\n';
+      d.cleared.errors.forEach(e => log += `    • ${e}\n`);
+    }
+    log += '═════════════════════';
+    appendLog(log);
+
+    setBadge('ready', 'Cache cleared');
+    setTimeout(() => setBadge('ready', 'Ready'), 2500);
+  } catch (e) {
+    appendLog('ERROR clearing cache: ' + e.message);
+    setBadge('error', 'Error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalContent;
+  }
+}
 
 async function updatePreview() {
   if (!files.length) {
@@ -1734,6 +1881,7 @@ def run_web_dashboard(port=5000):
     # Replace the existing api_conv route:
 
     @app.route("/api/convert", methods=["POST"])
+
     def api_conv():
         from converter import convert_cbz
         from workers import WorkerPool, Job, JobStatus
@@ -1883,6 +2031,87 @@ def run_web_dashboard(port=5000):
         threading.Thread(target=run_conversion, daemon=True).start()
         return jsonify({"session_id": session_id, "started": True})
 
+    @app.route("/api/clear-cache", methods=["POST"])
+    def api_clear_cache():
+        """Clear temp uploads, output files, completed sessions, and API cache."""
+        cleared = {
+            "uploads": 0,
+            "outputs": 0,
+            "sessions": 0,
+            "api_cache": 0,
+            "errors": [],
+        }
+
+        # Clear upload temp files
+        try:
+            for f in os.listdir(up_dir):
+                fp = os.path.join(up_dir, f)
+                try:
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+                        cleared["uploads"] += 1
+                except Exception as e:
+                    cleared["errors"].append(f"upload {f}: {e}")
+        except Exception as e:
+            cleared["errors"].append(f"upload dir: {e}")
+
+        # Clear output files (only completed/orphaned ones — keep active session files)
+        active_files = set()
+        with JOBS_LOCK:
+            for sid, s in JOBS.items():
+                if not s.get("complete"):
+                    for d in s.get("downloads", []):
+                        active_files.add(d.get("filename"))
+
+        try:
+            # Walk both out_dir and OutputFiles subdir
+            for base in [out_dir, os.path.join(out_dir, "OutputFiles")]:
+                if not os.path.isdir(base):
+                    continue
+                for f in os.listdir(base):
+                    if f in active_files:
+                        continue
+                    fp = os.path.join(base, f)
+                    try:
+                        if os.path.isfile(fp):
+                            os.remove(fp)
+                            cleared["outputs"] += 1
+                    except Exception as e:
+                        cleared["errors"].append(f"output {f}: {e}")
+        except Exception as e:
+            cleared["errors"].append(f"output dir: {e}")
+
+        # Clear completed sessions from memory
+        with JOBS_LOCK:
+            completed = [sid for sid, s in JOBS.items() if s.get("complete")]
+            for sid in completed:
+                del JOBS[sid]
+                cleared["sessions"] += 1
+
+        # Clear API cache
+        try:
+            with resolver.api._cache_lock:
+                cleared["api_cache"] = len(resolver.api._cache)
+                resolver.api._cache.clear()
+        except Exception as e:
+            cleared["errors"].append(f"api cache: {e}")
+
+        cleared["total_freed_mb"] = round(
+            (cleared["uploads"] + cleared["outputs"]) * 0,  # placeholder
+            2,
+        )
+
+        return jsonify({
+            "success": True,
+            "cleared": cleared,
+            "message": (
+                f"Cleared {cleared['uploads']} uploads, "
+                f"{cleared['outputs']} outputs, "
+                f"{cleared['sessions']} sessions, "
+                f"{cleared['api_cache']} API cache entries"
+            ),
+        })
+
     # Replace api_status to include output_dir:
 
     @app.route("/api/status/<session_id>")
@@ -1934,6 +2163,7 @@ def run_web_dashboard(port=5000):
     import webbrowser
     threading.Timer(1.5, lambda: webbrowser.open("http://localhost:" + str(port))).start()
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
 
 
 if __name__ == "__main__":
