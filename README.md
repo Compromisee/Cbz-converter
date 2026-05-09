@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/CBZ-Converter-3b82f6?style=for-the-badge&logo=bookstack&logoColor=white" alt="CBZ Converter" />
-
 # 📚 CBZ Manga Converter
 
 ### Convert CBZ comic archives to EPUB and PDF — with automatic manga metadata, multi-API lookup, and parallel processing
