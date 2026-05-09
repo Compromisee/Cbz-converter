@@ -102,7 +102,7 @@
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/compromisee/cbz-converter.git
+git clone https://github.com/Compromisee/cbz-converter.git
 cd cbz-converter
 
 # 2. Install dependencies
